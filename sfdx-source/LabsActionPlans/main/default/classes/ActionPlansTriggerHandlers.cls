@@ -665,19 +665,41 @@ global inherited sharing class ActionPlansTriggerHandlers {
 				for (Lead l : newRecords) {
 					if (l.IsConverted && !oldRecordsMap.get(l.Id).IsConverted && apMap.containsKey(l.Id)) {
 						for (ActionPlan__c ap : apMap.get(l.Id)) {
+							Id destinationId;
 							switch on destinationObject {
 								when 'account' {
-									ap.Account__c = l.ConvertedAccountId;
+									destinationId = l.ConvertedAccountId;
+									ap.Account__c = destinationId;
 								}
 								when 'opportunity' {
-									ap.Opportunity__c = l.ConvertedOpportunityId;
+									destinationId = l.ConvertedOpportunityId;
+									ap.Opportunity__c = destinationId;
 								}
 								when else {
-									ap.Contact__c = l.ConvertedContactId;
+									destinationId = l.ConvertedContactId;
+									ap.Contact__c = destinationId;
 								}
 							}
-							ap.Lead__c = null;
-							toUpdate.add(ap);
+							// The configured destination may not exist for this conversion
+							// (e.g. routed to Opportunity but converted with
+							// DoNotCreateOpportunity). Fall back to the Contact, then the
+							// Account, so the plan always keeps exactly one related record
+							// and the before-update validation doesn't fail the conversion.
+							if (destinationId == null) {
+								if (l.ConvertedContactId != null) {
+									destinationId = l.ConvertedContactId;
+									ap.Contact__c = destinationId;
+								} else if (l.ConvertedAccountId != null) {
+									destinationId = l.ConvertedAccountId;
+									ap.Account__c = destinationId;
+								}
+							}
+							// Only detach from the Lead once a destination is set; otherwise
+							// leave the plan on the Lead rather than orphan it.
+							if (destinationId != null) {
+								ap.Lead__c = null;
+								toUpdate.add(ap);
+							}
 						}
 					}
 				}

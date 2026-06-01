@@ -374,6 +374,51 @@ private class ActionPlansObjectTriggersTest {
 		Assert.areEqual(2, [SELECT COUNT() FROM ActionPlan__c WHERE Contact__c != NULL], 'Both plans should be reparented to the Contact');
 	}
 
+	/**
+	 * When lead conversion is routed to Opportunity but the Lead is converted
+	 * without creating one (DoNotCreateOpportunity), the plan must fall back to
+	 * the Contact rather than be left with no related record (which would fail
+	 * the ActionPlan before-update validation and break the conversion).
+	 */
+	@IsTest
+	private static void leadConversionFallsBackWhenNoOpportunity() {
+		ActionPlansTestUtilities testutil = new ActionPlansTestUtilities();
+		User u = testutil.createTestUser();
+		testutil.assignAPPermissionSets(u.Id, true);
+
+		Lead l;
+		System.runAs(new User(Id = UserInfo.getUserId())) {
+			l = testutil.createNewLead();
+			insert new ActionPlan__c(Name = 'AP Opp Route', StartDate__c = Date.today(), Lead__c = l.Id);
+		}
+
+		Test.startTest();
+		System.runAs(u) {
+			Action_Plans_Settings__c settings = Action_Plans_Settings__c.getInstance();
+			settings.Default_Object_on_Lead_Conversion__c = 'Opportunity';
+			try {
+				upsert settings;
+			} catch (Exception e) {
+				update settings;
+			}
+
+			Database.LeadConvert lc = new Database.LeadConvert();
+			lc.setDoNotCreateOpportunity(true); // no Opportunity is created
+			lc.setLeadId(l.Id);
+
+			LeadStatus convertStatus = [SELECT Id, MasterLabel FROM LeadStatus WHERE IsConverted = TRUE LIMIT 1];
+			lc.setConvertedStatus(convertStatus.MasterLabel);
+
+			Database.LeadConvertResult lcr = Database.convertLead(lc);
+			Assert.isTrue(lcr.isSuccess(), 'Conversion should succeed even when routed to a non-existent Opportunity');
+		}
+		Test.stopTest();
+
+		Assert.areEqual(0, [SELECT COUNT() FROM ActionPlan__c WHERE Lead__c != NULL], 'Plan should be detached from the converted Lead');
+		Assert.areEqual(0, [SELECT COUNT() FROM ActionPlan__c WHERE Opportunity__c != NULL], 'No Opportunity was created, so the plan should not be on one');
+		Assert.areEqual(1, [SELECT COUNT() FROM ActionPlan__c WHERE Contact__c != NULL], 'Plan should fall back to the Contact');
+	}
+
 	@IsTest
 	private static void leadConversionAccount() {
 		ActionPlansTestUtilities testutil = new ActionPlansTestUtilities();
